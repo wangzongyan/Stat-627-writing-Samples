@@ -1,0 +1,277 @@
+---
+title: "Assignment 4"
+author: "zongyan wang"
+date: "Friday, November 20, 2015"
+output: pdf_document
+---
+# Homework 4: Data cleaning
+## Load packages
+```{r}
+require(plyr)
+require(dplyr)
+require(testthat)
+```
+
+## Load data
+### Load data with strip.white = TRUE
+```{r}
+URL <- "http://STAT545-UBC.github.io/gapminderDataFiveYear_dirty.txt"
+data <- read.csv(URL, strip.white = TRUE, header = T, sep = "\t", stringsAsFactors = F)
+```
+
+### Load data with strip.white = FALSE, reflect on what difference this argument makes
+```{r}
+data_withoutStripWhite <- read.csv(URL, strip.white = FALSE, header = T, sep = "\t", 
+                                   stringsAsFactors = F)
+data_withoutStripWhite %>% filter(year == 2007 & region == "Asia_Jordan")
+data %>% filter(year == 2007 & region == "Asia_Jordan")
+rm(data_withoutStripWhite)
+```
+Comment: strip.white argument controls to trim leading and trailing whitespace while reading the data. For example, as shown above, there is a specific row data in the data where the year is 2007, and the region has leading whitespace before Asia_Jordan. This problem can be fixed if we set strip.white = TRUE.
+
+##Splitting or merging
+```{r}
+head(data$region)
+```
+The region column contains both the country and continent information, we'd like to split up into two columns "country" and "continent". But before doing it, let's check if every elment have the same format as "Continent_Country".
+
+### Check each element has the format "Continent_Country" in the region column
+```{r}
+grep("(.+)_(.+)", data$region, invert = T)
+grep("(.+)_(.+)", data$region, invert = T, value = T)
+```
+There is a region doesn't have the format. Let's build a group of functions to fix the problem automatically.
+```{r}
+# Build a function to fix the issue
+#' Hw 4 function formatFix
+#'
+#' fixFormatSingle is required to run formatFix
+#' The function match the "_Country" cases for whole data and find correct format of 
+#' this data automatically and assign it to our problem cases.
+#' @param data
+#' @param variable: the variable has the format problem
+#' @return data with the problem fixed
+#'
+
+formatFix <- function(data, variable){
+  problem.index <- which(1:length(data[,variable]) %in% grep("(.+)_(.+)", data[,variable]) == FALSE)
+  # id is the order of regions' names needed to be fixed
+  df <- data.frame(region = unique(data[,variable][problem.index]))
+  if(nrow(df) < 1){
+    return(data)
+  }
+  df$ID <- 1:nrow(df)
+  df <- merge(problem.index, df)
+  data <- df %>% ddply(., ~ID, function(x){fixFormatSingle(data, variable, x)})
+  data <- data %>% select(-ID)
+  return(data)
+  }
+
+
+#' Hw 4 function fixFormatSingle
+#'
+#' The function match a single "_Country" case and find correct format of 
+#' this data automatically and assign it to our problem cases.
+#' @param data
+#' @param variable: the variable has the format problem
+#' @param df: it's the data frame contains the problem cases and the its "ID" number.
+#' @return data with the problem fixed
+#'
+fixFormatSingle <- function(data, variable, df){
+    index <- df[,"x"]
+    oriSpell <- data[,variable][index[1]]
+    correction.index <- grep(oriSpell, data[,variable])[!(grep(oriSpell, data[,variable]) %in% index)]
+  data$region[index] <- rep(data$region[correction.index][1], length(index))
+  ## drop level
+  #data$region <- data$region %>% droplevels()
+  return(data)
+  }
+
+# Use the function to fix the issue
+data1 <- formatFix(data, "region" )
+
+# check region have the correct format after fixing and drop the incorrect levels
+data1$region[-grep("(.+)_(.+)", data1$region)]
+str(data1)
+data <- data1
+if (!is.null(globalenv()$data1)){
+  rm(data1)
+}
+```
+Now, we'd like to build up a group of functions to do the split-up
+
+```{r}
+## Build functions to solve the problem
+#' Hw 4 function split.single
+#'
+#' function split.single splits the region column to two columns var1 and var2
+#' @param splitString: the column required to be splitted of the data
+#' @param data.split: a data frame contains the data after split. It's a null data frame at 
+#'begining
+#' @param var.split: the column name required to be splitted of the data
+#' @param var1.name: the name set for the first split column
+#' @param var2.name: the name set for the second split column
+#' @return data.split contains two new column var1, var2
+#'
+split.single <- function(splitString, data.split, var.split = "region", 
+                         var1.name = "continent", var2.name = "country"){
+  s = strsplit(as.character(splitString), split = "_")
+  n = length(s[[1]][1])
+  s = data.frame(k = rep(splitString, n), a = s[[1]][1], b = s[[1]][2])
+  colnames(s) <- c(var.split, var1.name, var2.name)
+  return(rbind(data.split, s))
+}
+
+#' Hw 4 function split
+#'
+#' function split splits the region column to two columns "country" and "continent"
+#' @param data
+#' @param var.split: the column name required to be splitted of the data
+#' @param var1.name: the name set for the first split column
+#' @param var2.name: the name set for the second split column
+#' @return data contains two new columns var1, var2
+#'
+
+
+split <- function(data, var.split = "region", var1.name = "continent", var2.name = "country",
+                  var.merge = "gdpPercap"){
+  test_that("Please input a valid column name", {
+    expect_equal(is.null(data[,var.split]), F)
+    expect_equal(length(data[,var.split]) == 0, F)
+    })
+  data.split <- data.frame(k = c(), a = c(), b = c())
+  ## use apply() function to put var1, var2 in a list
+  aList <- apply(matrix(data[,var.split]), 1, function(x) {split.single(x, data.split)})
+  # convert list to data.frame
+  dataframe <- do.call(rbind.data.frame, aList)
+  data[,var1.name] <- dataframe[,var1.name]
+  data[,var2.name] <- dataframe[,var2.name]
+#  data <- merge(data, dataframe, by = c(var.split))
+  data <- data %>% select(-region)
+  return(data)
+}
+  
+  
+data1 <- split(data, "region", "continent","country")
+str(data1)
+data <- data1
+if (!is.null(globalenv()$data1)){
+  rm(data1)
+}
+```
+Check it out, we split the "region" successfully.
+
+## Missing values
+```{r}
+# Look for NA
+apply(data, 2, function(x){sum(is.na(x))})
+# Look for empty string
+apply(data, 2, function(x){sum(x == "")})
+```
+There is no missing values in the dataset.
+
+### We'll make a dictionary next.
+```{r}
+# get the frequency of countries' name in our data
+n_occur <- data.frame(table(data$country))
+# We take the regions appears more than 2 times to build the dictionary
+dictionary <- n_occur[n_occur$Freq > 2,]$Var1 %>% droplevels()
+str(dictionary)
+str(as.factor(data$country))
+
+```
+Check vector dictionary and country, we get there should be 3 regions which appears less than once in our data.\
+Next, check those regions' validity, and fix the problem.
+```{r}
+which((data$country %in% dictionary) == FALSE)
+spell.problem <- data$country[which((data$country %in% dictionary) == FALSE)]
+```
+The row number of the "wrong" spelling is 329, 334, 370. And the names are shown above.\
+We search for "Congo" to see the name is valid or not.
+
+```{r}
+data$country[grep("Congo", data$country)]
+```
+To make the data easier to read, we just record all these names to be "Congo, Dem. Rep.".
+```{r}
+data$country <- gsub(spell.problem[1], "Congo, Dem. Rep.", data$country)
+data$country <- gsub(spell.problem[2], "Congo, Dem. Rep.", data$country)
+country <- as.factor(data$country) %>% droplevels()
+str(country)
+# check the dictionary again
+spell.problem <- data$country[which((data$country %in% dictionary) == FALSE)]
+spell.problem
+```
+The only name that is out of the dictionary is "cote d'ivore". Find the country's name related to "cote d'ivore"
+```{r}
+dictionary[grep("Cote", dictionary)]
+```
+Seems there is a spell error here. use gsub to fix it.
+```{r}
+data$country <- gsub(spell.problem[1], dictionary[grep("Cote", dictionary)] , data$country)
+country <- as.factor(data$country) %>% droplevels()
+str(country)
+all(data$country %in% dictionary)
+```
+So far, every region appears more than once in the data. BUT...
+```{r}
+length(data$year)/length(unique(data$year))
+```
+Use the year's data, we realize there should be only 142 groups of data, however, we get 144 different regions' names. We need to find out how it goes wrong.
+```{r}
+which((table(data$country) < 10))
+```
+The problem comes out to be the capitalizing issue.
+
+### Capitalize
+```{r}
+# Capitalize the first character of each word in country.
+data$country <- gsub("\\b([a-z])", "\\U\\1", data$country, perl = TRUE)
+#data$country <- as.factor(data$country) %>% droplevels()
+str(as.factor(data$country))
+which((table(data$country) < 12))
+```
+I would say the data cleaning jobs have done.
+
+## Final check
+```{r}
+URL1 <- "http://STAT545-UBC.github.io/gapminderDataFiveYear.txt"
+final.data <- read.csv(URL1, strip.white = TRUE, header = T, sep = "\t", stringsAsFactors = F)
+identical(data, final.data)
+```
+The comparison gives me an FALSE, it seems there still something need to do.
+```{r}
+str(final.data)
+str(data)
+
+```
+Compare the characteristics of the final data and our data, the final data has the "continent" character. Fix the problem
+
+```{r}
+data <- data[, c(6,1,2,5,3,4)]
+data[, "country"] <- sapply(data[, "country"], as.character)
+data[, "continent"] <- sapply(data[, "continent"], as.character)
+identical(data, final.data)
+for (i in 1: 6){
+  print(identical(data[,i], final.data[,i]))
+}
+
+```
+It still doesn't work for country, look inside with a loop and find what's happened
+```{r}
+c1 <- unique(data$country)
+c2 <- unique(final.data$country)
+cat(paste(c1[!c1 == c2], "    WITH     ", c2[!c1==c2], collapse = '\n'))
+
+```
+The problem comes out as some capitalization problem using the function "gsub("\\b([a-z])", "\\U\\1", data$country, perl = TRUE)" as required by JB. It capitalized the first character of every words as we wanted there. And now we know JB has some other "potential" requirement which not be written in the assignment.
+```{r}
+data$country <- gsub(pattern = " And", replacement = " and", x = data$country)
+data$country <- gsub(pattern = "D'", replacement = "d'", x = data$country)
+```
+check those two data sets again.
+```{r}
+identical(data, final.data)
+```
+We finish the data cleaning.
+

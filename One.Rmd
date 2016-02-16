@@ -1,0 +1,673 @@
+---
+title: "Assignment 3"
+author: "zongyan wang"
+date: "Saturday, October 24, 2015"
+output: pdf_document
+---
+
+# Upload tidyr, dplyr, gapminder, testthat and ggplot2 package
+```{r, warning = FALSE, message = FALSE}
+library("robustbase")
+library("plyr")
+library("tidyr")
+library("dplyr")
+library("ggplot2")
+library("testthat")
+```
+# Homework 4
+## Load data
+```{r}
+link <- "http://www.stat.ubc.ca/~jenny/notOcto/STAT545A/examples/gapminder/data/gapminderDataFiveYear.txt"
+### link contains the website link of data set "gapminderDataFiveYear.txt"
+gapminder <- read.delim(link)   # load the data in gapminder
+head(gapminder)
+```
+## Sudden, substantial departures from the temporal trend is interesting. This goes for life expectancy, GDP per capita, or population. How could you operationalize this notion of "interesting"?
+```{r}
+#' Hw 4 function data.valid
+#'
+#' function data.valid is a test function for departures() and etc. 
+#' data.valid sends back an error if the data and variable input are not valid for its main
+#' function
+#' test the data 
+#' @param data: the data input in departure() and etc.
+#' @param variable: a string, column name for data
+#' @example
+#' library(gapminder)
+#' data.valid(subset(gapminder, country == "Australia"), "pop")
+
+
+data.valid <- function(data,variable){
+  test_that("Please input the data from same country", {
+    expect_equal(length(unique(data$country)), 1)
+    })
+  test_that("Please input a string of variable name of gapminder", {
+    expect_equal(is.character(variable), TRUE)
+    expect_equal(is.null(data[,variable]), FALSE)
+    })
+  test_that("Please input invalid data", {
+    expect_equal(is.null(data$year), FALSE)
+    expect_equal(is.null(data$country), FALSE)
+    })
+  stopifnot(length(data$year) > 0)
+  }  
+
+```
+
+```{r}
+#' Hw 4 function single.departures
+#'
+#' The Function departures use Cooks' distance to determine the departure points.
+#' print out a data.frame with the column year and row countries, 
+#' The result is No if it's not a departure, and Yes if it's so.
+#' The function require package robustbase, dplyr, it calls the "MM" method in function lmrob 
+#' for parameters estimation.
+#'
+#' @param data: a particular country's data in gapminder, send back an error for multi-country
+#' @param variable: a string, variable name in gapminder, e.g. pop, lifeExp, etc. 
+#' @param cri.value: critical value for cook's distance test
+#' @param offset: begining year of the data
+#' @return a data.frame contains the the country name, departure judgement over year.
+#' @example 
+#' library(gapminder)
+#' single.departures(subset(gapminder, country == "Australia"), "pop")
+
+single.departures<-function(data, variable, cri.value = 4, offset = 1952){
+  data <- as.data.frame(data)
+  ## Test if data and variable input are valid
+  data.valid(data, variable)
+  ls <- lm(data[,variable] ~ I(year - offset), data = data)
+  if (sum(cooks.distance(ls) > (cri.value/nrow(data))) > 0){ # Outlier if cooks.distance > n/4
+    index.outlier <- which(cooks.distance(ls) > cri.value/nrow(data))
+    departure.country <- rep(unique(data$country), length(nrow(data)))
+    year <- data$year
+    departure.year <- rep("no", nrow(data))
+    departure.year[index.outlier] <- "yes"
+    departure <- data.frame(country = departure.country, year = year, 
+                            departure = departure.year)
+    departure %>% spread(year, departure)
+    } 
+  }
+
+```
+
+```{r}
+#' Hw 4 function multiDepartures
+#'
+#' The Function multi-Departures use Cooks' distance to determine the departure points.
+#' print out a data.frame with the column year and row countries, 
+#' The result is No if it's not a departure, and Yes if it's so.
+#' The function require package robustbase, dplyr, it calls the "MM" method in function lmrob 
+#' for parameters estimation.
+#'
+#' @param data: gapminder or a subset of gapminder, should be a data.frame
+#' @param variable: a string, variable name in gapminder, e.g. pop, lifeExp, etc. 
+#' @param cri.value: critical value for cook's distance test
+#' @param offset: begining year of the data
+#' @return 
+#' @example
+#' multiDepartures(subset(gapminder, continent == "Oceania"), "pop")
+
+
+multiDepartures<-function(data = gapminder, variable, cri.value = 4, offset = 1952){
+  ## make the variable name can be called by data
+  #  variable <- as.list(match.call()[-1])
+  #  variable <- as.character(variable$variable)
+  ddply(data, ~country, function(x) single.departures(x, variable, cri.value, offset))
+  }
+
+```
+
+```{r}
+# Sample run for continent Oceania. It takes too much space to print the tables for 
+# every variables and every continent, but we can do it with similiar coding as follows:
+
+## Population departures for Oceania, set cri.value as 4 (default)
+dplyr::do(subset(gapminder, continent == "Oceania"), multiDepartures(. , "pop"))
+
+## Population departures for Oceania, set cri.value as the num of observations each country(12)
+dplyr::do(subset(gapminder, continent == "Oceania"), multiDepartures(. , "pop", cri.value = 12))
+
+## life Expentancy departures for Oceania, set cri.value as 4 (default)
+multiDepartures(subset(gapminder, continent == "Oceania"), "lifeExp")
+## GDP Percap departures for Oceania, set cri.value to 4 (default)
+multiDepartures(subset(gapminder, continent == "Oceania"), "gdpPercap", cri.value = 4)
+```
+We use Oceania as an example to test our function. Both two countries in Oceania have departures when we set our criteria value as default(which has Statistical meanning). We can see even when we set our criteria value 4 times as big as our default, there is still departures, which sounds really "abnormal". We probably need to try polynomial model in our further data exploration.
+
+
+## Fit a regression of the response vs. time. Use the residuals to detect countries where your model is a terrible fit. Example:
+### Are there are 1 or more freakishly large residuals, in an absolute sense or relative to some estimate of background variablility?
+### Are there strong patterns in the sign of the residuals? E.g. all pos, then all neg, then pos again.
+```{r}
+#' Hw 4 function pattern
+#'
+#' Function pattern get the residual and return TRUE if there is a pattern
+#'
+#' @param residual: residual from linear regression
+#' @return TRUE if there is a pattern
+
+pattern <- function(residual){
+  stopifnot(is.vector(residual))
+  time = 0
+  signResidual <- sign(residual[1])
+  for(i in 1 : length(residual)){
+    t = sign(residual[i])
+    if(signResidual != t){
+      time = time + 1
+      }
+    signResidual = t
+    }
+  if(time <= 2){
+    return(TRUE)
+    }
+  return(FALSE)
+  }
+```
+
+```{r}
+#' The Function single.testResidual test if there is a terrible fit, it returns a data.frame for
+#' the test result
+#'
+#' @param data: a country from gapminder, should be a data.frame
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+#' @param cri.value: critical value for considering a large residual
+#' @return data.frame contains the test result if there is a terrible fit.
+single.testResidual <- function(data, variable, offset = 1952, cri.value = 1){
+  data <- as.data.frame(data)
+  #  variable <- as.list(match.call()[-1])
+  #  variable <- as.character(variable$variable)
+  data.valid(data, variable)
+  country <- unique(data$country)
+  largeResidual <- "No"
+  residualPattern <- "No"
+  ls <- lm(data[,variable] ~ I(year - offset), data = data)
+  if ((sum(abs(rstandard(ls)) > cri.value) == TRUE)){
+    largeResidual <- "Yes"
+    }
+  if (pattern(rstandard(ls))){
+    residualPattern <- "Yes"   
+    }
+  if((sum(abs(rstandard(ls)) > cri.value) == TRUE) || pattern(rstandard(ls))){
+    data.frame(country = country, largeResidual = largeResidual,
+               residualPattern = residualPattern)
+    }
+  }
+
+```
+
+```{r}
+#' The Function multi.testResidual test if there is a terrible fit, it returns a data.frame for
+#' the test result
+#'
+#' @param data: a country from gapminder, should be a data.frame
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+#' @param cri.value: critical value for considering a large residual
+#' @return data.frame contains the test result if there is a terrible fit.
+multi.testResidual <- function(data, variable, offset = 1952, cri.value = 1){
+  ddply(data, ~country, function(x) single.testResidual(x, variable, offset, cri.value = cri.value))
+  }
+```
+
+```{r}
+# Sample run for Continent Oceania
+Oceania <- gapminder %>% filter(continent == "Oceania")
+
+## Population departures for Oceania with default critical value
+multi.testResidual(subset(gapminder, continent == "Oceania"), "pop")
+
+
+# life Expentancy departures for Oceania with default critical value
+multi.testResidual(Oceania, "lifeExp")
+
+# GDP Percap departures for Oceania with default critical value
+multi.testResidual(Oceania, "gdpPercap")
+
+```
+We use Oceania data again as our function test. For both of two countries in Oceania, there exist residual pattern, which suggest the result of simple linear model is not convicable. 
+
+
+## Fit a regression using ordinary least squares and a robust technique. Determine the difference in esitmated parameters under the two approaches. If it is large, consider that country "interesting". 
+```{r}
+#' The Function interesting.country compare result with least squares and robust technique.
+#' print out a data.frame of countries interesting 
+#' The function require package robustbase, dplyr, it calls the "MM" method in function lmrob 
+#' for parameters estimation.
+#'
+#' @param data: data from one country of gapminder, should be a data.frame
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+#' @param ffset: begining year of the data
+#' @param confidence.level: confidence level for the comparison.
+
+
+interesting.country <- function(data, variable, offset = 1952, confidence.level = 0.95){
+  data <- as.data.frame(data)
+  #  variable <- as.list(match.call()[-1])
+  #  variable <- as.character(variable$variable)
+  data.valid(data, variable)
+  ls <- lm(data[,variable] ~ I(year - offset), data = data)
+  lr <- lmrob(data[,variable] ~ I(year - offset), method = "MM", data = data)
+  # See the parameters estimated by lr.pop are in the C.I.
+  bool.intercept <- coef(lr)[1] > confint(ls, level = confidence.level)[1,1] & 
+    coef(lr)[1] < confint(ls, level = confidence.level)[1,2]
+  bool.year <- coef(lr)[2] > confint(ls, level = confidence.level)[2,1] & 
+    coef(lr)[2] < confint(ls, level = confidence.level)[2,2]
+  if (!bool.intercept | !bool.year){
+    unique(data$country)
+    }
+  }
+
+```
+
+```{r}
+#' The Function multi.interesting compare result with least squares and robust technique.
+#' print out a data.frame of countries interesting 
+#' The function require package robustbase, dplyr, it calls the "MM" method in function lmrob 
+#' for parameters estimation.
+#'
+#' @param data: gapminder or subset of gapminder, should be a data.frame
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+#' @param ffset: begining year of the data
+#' @param confidence.level: confidence level for the comparison.
+multi.interesting <- function(data = gapminder, variable, offset = 1952, confidence.level = 0.95){
+  ddply(data, ~country, function(x) interesting.country(x, variable, offset, confidence.level))
+  }
+```
+
+
+```{r, warning = F}
+## Sample run
+## Use Asia as example
+
+### Consider the variable population with default confidence level
+multi.interesting(subset(gapminder, continent == "Asia"), "pop")
+
+### Consider the variable life Expentancy with default confidence level
+multi.interesting(subset(gapminder, continent == "Asia"), "lifeExp")
+
+### Consider the variable life Expentancy with confidence level equal to 0.99
+multi.interesting(subset(gapminder, continent == "Asia"), "lifeExp", confidence.level = 0.99)
+
+
+```
+We use Asia data as an example of exploration. For the population of China and Iraq, even when we set the confidence level to .99, it still gives back a significant result. We could say China and Iraq have very interesting population data, which may probably as a result of politician or war issues. \
+We can explore the rest of variables and continents with this function.
+
+
+
+
+## Fit a degree 2 polynomial. Retain quantities that speak to goodness-of-fit and explore that across all 142 countries.
+```{r}
+#' The Function polyBetter compare result with degree 2 polynomial model and linear model.
+#' print out a data.frame of countries interesting 
+#' The function require package robustbase, dplyr, it calls the "MM" method in function lmrob 
+#' for parameters estimation.
+#'
+#' @param data: data from one particular country in gapminder
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+polyBetter <- function(data, variable, offset = 1952){
+  data <- as.data.frame(data)
+  #  variable <- as.list(match.call()[-1])
+  #  variable <- as.character(variable$variable)
+  data.valid(data, variable)
+  ls <- lm(data[,variable] ~ I(year - offset), data = data)
+  l.py <- lm(data[,variable] ~ I(year^2) + year, data = data)
+  if(summary(l.py)$adj.r.squared >= summary(ls)$adj.r.squared){
+    unique(data$country)
+    }
+  }
+```
+
+```{r}
+#' multi.polyBetter is the multi-countries version of polyBetter
+#' @param data: gapminder or a subset of gapminder
+#' @param variable: a variable name in gapminder, e.g. pop, lifeExp, etc. It's case sensitive
+multi.polyBetter <- function(data = gapminder, variable, offset = 1952){
+  ddply(data, ~country, function(x) polyBetter(x, "pop", offset))$country
+  }
+```
+
+```{r}
+# Use polyBetter to scan variable population for all the countries in gapminder.
+multi.polyBetter(variable = "pop")
+# Use polyBetter to scan variable life Expectancy for Asia countires in gapminder.
+gapminder %>% 
+  filter(continent == "Asia") %>%
+  droplevels() %>%
+  multi.polyBetter(., "lifeExp")
+```
+We can see from the result as population is a curved variable, we'd better use polynomial model instead of simple linear for population. \
+Explore variable lifeExp with Asia data, we find lifeExp is also a curved varible. \
+We can explore other variables and other continents in the same way.
+
+
+## How is GDP per capita changing over time? 
+```{r}
+# Function gdpChanging print out the gdpPercap over time and the plot.
+# Parameter:
+# @data: gapminder or a subset of gapminder
+# @tablePrint: TRUE if user wants to print out the table
+gdpChanging <- function(data = gapminder, tablePrint = T){
+  stopifnot(is.data.frame(data) == TRUE)
+  stopifnot(is.null(data$year) == FALSE)
+  stopifnot(is.null(data$country) == FALSE)
+  stopifnot(length(data$year) > 0)
+  gdp <- data %>%
+    select(country, year, gdpPercap)
+  if(tablePrint){
+    print(tidyr::spread(gdp, year,gdpPercap))
+    }
+  ggplot(gdp, aes(x = year, y = gdpPercap, fill = country)) +
+    geom_point(aes(color = country)) +
+    geom_smooth(aes(color = country))
+  }
+```
+
+```{r}
+## Sample run
+# Use Oceania and Asia as example of gdpChanging
+# Oceania GDP per capita changes over time
+gdpChanging(subset(gapminder, continent == "Oceania"))
+
+# Aisan GDP per capita changes over time, set option tablePrint = FALSE to ask no tabe print
+gdpChanging(subset(gapminder, continent == "Asia"), tablePrint = FALSE)
+```
+The Oceania countries shows an increasing GDP per capita over time. While most Asian countries agree, there are several countries in Asia gives interesting result. We may be interested in studying those countries.
+
+
+## How about the relationship between GDP per capita and life expectancy?
+```{r}
+gdpVSlifeExp <- function(data){
+  stopifnot(is.data.frame(data) == TRUE)
+  stopifnot(is.null(data$year) == FALSE)
+  stopifnot(is.null(data$country) == FALSE)
+  stopifnot(length(data$year) > 0)
+  gdp <- data %>%
+    select(country, lifeExp, gdpPercap)
+  ggplot(gdp, aes(x = lifeExp, y = gdpPercap, fill = country)) +
+    geom_point(aes(color = country)) +
+    geom_smooth(aes(color = country))
+  }
+```
+
+```{r}
+# Take Oceania and Asia as the example of gdpVSlifeExp
+gdpVSlifeExp(subset(gapminder, continent == "Asia"))
+gdpVSlifeExp(subset(gapminder, continent == "Oceania"))
+```
+While Oceania suggests the linear relationship between GDP per capita and LifeExp, Asia gives no evidence to the relationship. We probably cannot say there exists a relationship between GDP per capita and Life Expectancy.
+
+
+# Homework 5
+## Factor management
+### Drop Oceania
+```{r}
+# Infor print out the data and variable information for Drop() function ori.infor = T option
+Infor <- function(data, variable){
+  print("Summary of the data")
+  print(data %>% summary())
+  print(str(data))
+  }
+level.Infor <- function(data, variable){
+  print("Num of variable levels")
+  print(nlevels(data[,variable]))
+  print("Summary of the variable levels")
+  print(levels(data[,variable]))
+  print(table(data[,variable]))
+  }
+# dropImplement 
+thisLevelImplement <- function(data, variable, level){
+  drop.data <- data %>%
+    filter(.[,variable] %in% c(level)) %>%
+    droplevels()  
+  return (drop.data)
+  }
+
+# keepImplement
+noThisLevelImplement <- function(data, variable, level){
+  remove.data <- data %>%
+    filter(!(.[,variable] %in% c(level))) %>%
+    droplevels()
+  return(remove.data)
+  }
+```
+
+```{r}
+#' Hw 5 function Drop
+#'
+#' Drop is the function to drop a particular level from the original data 
+#' @param data: the data input 
+#' @param variable: a string, column name for data
+#' @param level: the level required to be droped from variable
+#' @param ori.infor: logit option, TRUE if the summary of original data is required
+#' @param ori.level.infor: logit option, TRUE if the summary of variable levels is required
+#' @param drop.infor: logit option, TRUE if the summary of the data dropped required
+#' @param keep.infor: logit option, TRUE if the summary of the data after implement required
+#' @param keep.level.infor: logit option, TRUE if the variable levels after implement required
+#' @param this.level: logit option, TRUE if the level input is required to be kept
+#' @return data without level dropped if this.level is FALSE, particular level data if 
+#' this.level is TRUE
+Drop <- function(data = gapminder, variable, level, ori.infor = F, ori.level.infor = F, 
+                 drop.infor = F, keep.infor = F, keep.level.infor = F, this.level = F){
+  # Test data and variable
+  test_that("Please input a valid variable name", {
+    expect_equal(is.character(variable), TRUE)
+    expect_equal(is.null(data[,variable]), FALSE)
+    })
+  test_that("Please input a valid variable level",{
+    expect_equal(is.character(level), TRUE)
+    expect_equal(is.null(data[,variable][level]), FALSE)
+    })
+  if(ori.infor == T){  # user requires the information of original data
+    print("information of original data")
+    Infor(data, variable)
+    }
+  if(ori.level.infor == T){
+    print("information of the implement level in original data")
+    level.Infor(data, variable)
+    }
+  if(this.level == T){
+    drop.data <- noThisLevelImplement(data, variable, level)
+    keep.data <- thisLevelImplement(data, variable, level)    
+    }else{
+      drop.data <- thisLevelImplement(data, variable, level)
+      keep.data <- noThisLevelImplement(data, variable, level)
+      }
+  if(drop.infor == T){
+    print("information of the data dropped")
+    Infor(drop.data)    
+    }
+  if(keep.infor == T){
+    print("information of the data remained")
+    Infor(keep.data)
+    }
+  if(keep.level.infor == T){
+    print("information of the implement variable in the data remained")
+    level.Infor(keep.data, variable)
+    }
+  return(keep.data)
+  }
+
+```
+
+```{r}
+# Drop Oceania
+hdata <- Drop(data = gapminder, "continent", "Oceania", ori.infor = T, ori.level.infor = T, 
+              drop.infor = T, keep.infor = T, keep.level.infor = T, this.level = F)
+```
+### Reorder the levels of country, use American countries as an example
+```{r}
+# Filter American observations
+Americas<-Drop(hdata, "continent", "Americas", keep.level.infor = T, this.level = T)
+
+# Reorder Americas countries based on the intercept of linear model for lifeExp
+#' Intercept fits a linear model for the country data input and return and intercept value
+#' @param data: data from a single country
+#' @param variable: variable to be fit
+#' @parma offset: beginning point of year
+#' @return intercept value of the fitted linear model
+
+Intercept <- function(data, variable = "lifeExp", offset = 1952){
+  data.valid(data, variable)
+  data <- as.data.frame(data)
+  l <- lm(data[,variable] ~ I(year - offset), data)
+  setNames(coef(l), c("intercept", "slope"))
+  return(coef(l)[1])
+  }
+
+#' multi-intercept is the multi-countries version of Intercept
+multi.intercept <- function(data, variable = "lifeExp", offset = 1952){
+  data %>% ddply(~ country, function(x) Intercept(x, variable, offset)) 
+  }
+```
+
+```{r}
+#' reorderWithIntercept uses the intercept of the linear model to reorder the data
+#' @param data: gapminder or a subset of gapminder
+#' @param variable: the variable as the dependent variable in the linear model
+#' @param offset: the beginning point of year
+#' @param plotBeforeReorder: TRUE if the plot before reorder is required
+#' @param plotAfterReorder: TRUE if the plot after reorder is required
+reorderWithIntercept <- function(data = gapminder, variable = "lifeExp", 
+                                 offset = 1952, plotBeforeReorder = F, 
+                                 plotAfterReorder = F){
+  intercept <- multi.intercept(data, variable, offset)
+  intercept <- rep(intercept[,2], each = 12)
+  data.variable <- data %>% 
+    mutate(intercept = as.numeric(intercept)) %>%
+    group_by(country) %>%
+    summarize(intercept = max(intercept)) %>%
+    mutate(country.ordered = reorder(x = country,X = intercept, FUN = max))
+  
+  if(plotBeforeReorder == T){
+    print("Plot before the reorder() ")
+    gg<-ggplot(data.variable, aes(x = country, y = intercept, group = 1, fill = country)) +
+      geom_point(aes(color = country)) +
+      geom_line(aes(color = country))
+    print(gg)
+    }
+  if(plotAfterReorder == T){
+    print("Plot after the reorder()")
+    gg<-ggplot(data.variable, aes(x = country.ordered, y = intercept, group = 1, 
+                                  fill = country.ordered)) +
+      geom_point(aes(color = country.ordered)) +
+      geom_line(aes(color = country.ordered))
+    print(gg)
+    }
+  return(data.variable)
+  }
+
+# Plot before the reorder() 
+Americas.lifeExp<-reorderWithIntercept(Americas, "lifeExp", plotBeforeReorder = T)
+
+# Plot after the reorder()
+Americas.lifeExp<-reorderWithIntercept(Americas, "lifeExp", plotAfterReorder = T)
+```
+### Characterize the (derived) data before and after your factor re-leveling.
+#### Explore the effects of arrange(). Does merely arranging data have any effect on, say, a figure?
+```{r}
+# Use Americas as an example
+Americas.arrange <- Americas %>%
+  group_by(year) %>%
+  arrange(., desc(lifeExp))
+Americas.arrange
+ggplot(Americas.arrange, aes(x = year, y = lifeExp, fill = country)) +
+  geom_point(aes(color = country)) +
+  geom_smooth()
+```
+arrange() gives the descending order for lifeExp over time in the table, but arrange() doesn't affects on the figure.
+
+#### Expore the effects of reorder(). What effect does this have on a figure?
+```{r}
+Americas.reorder <- Americas %>%
+  mutate(country = reorder(x = country,X = lifeExp, min))
+reorder.table <- Americas.reorder %>%
+  select(country, lifeExp) %>%
+  group_by(country) %>%
+  summarise(lifeExp = min(lifeExp))
+head(reorder.table)
+ggplot(Americas.reorder, aes(x = year, y = lifeExp, fill = country)) +
+  geom_point(aes(color = country)) +
+  geom_smooth()
+```
+We can see reorder() gives a reorder to the countries according to the minimum of lifeExp, and reorder() also affect on the lines' order in figure.
+
+#### Expore the effect reorder() + arrange().
+```{r}
+# Use Americas as an example
+Americas.reorder <- Americas %>%
+  mutate(country = reorder(x = country,X = lifeExp, FUN = min)) %>%
+  arrange(lifeExp)
+head(Americas.reorder)
+ggplot(Americas.reorder, aes(x = year, y = lifeExp, fill = country)) +
+  geom_point(aes(color = country)) +
+  geom_smooth()
+```
+reorder() + arrange() can get both the arranged data table and sorted data plot. 
+
+## Visualization design
+```{r}
+#' HW 5 function
+#' visualization draw a plot indicating the relationship between lifeExp and gdpPercap for a
+#' particular year
+#' @param data: gapminder of a subset of gapminder
+#' @param Year: the year required to draw
+#' @param used.plot: TRUE if the plot without further visualization design is required
+#' @param new.plot: TRUE if the plot with further visualization design is required
+#' @return gg: a list contains those two plots
+visualization <- function(data = hdata, Year, used.plot = F, new.plot = F){
+  test_that("Please input a valid year", {
+    expect_equal(is.null(data$year == Year), FALSE)
+    expect_equal(sum(data$year == Year) == 0, FALSE)
+    })
+  data.using <- data %>%
+    filter(year %in% c(Year)) %>%
+    droplevels()
+  # without further visualization
+  gg1 <- ggplot(data.using, aes(x = lifeExp, y = gdpPercap)) +
+    geom_point()
+  # with further visualization
+  data.using <- data.using %>%
+    group_by(continent) %>%
+    mutate(lifeExp = reorder(lifeExp, gdpPercap, max))
+  
+  gg2 <- ggplot(data.using, aes(x = lifeExp, y = gdpPercap, fill = country)) +
+    facet_wrap(~continent) +
+    geom_point(aes(size = pop , color = country)) +
+    xlab("Life Expectancy") + 
+    ylab("GDP per Capita") +
+    scale_size_continuous(range = c(2, 30))
+  gg <- list(gg1, gg2)
+  if(used.plot == T){
+    print(gg1)
+    }
+  if(new.plot == T){
+    print(gg2)
+    }
+  return(gg)
+  }
+
+
+# Use no techiques in ggplot2
+gg1 <- visualization(hdata, 2007, used.plot = T)
+
+# Let's reorder the data over continent, add color for country, circle for population
+gg2 <- visualization(hdata, 2007, new.plot = T)
+```
+
+## Writing figures to file
+```{r}
+# The plot to save
+gg2 <-visualization(hdata, 2007)[[2]]
+print(gg2)
+
+# Use ggsave() to save the file to F:/
+ggsave(filename = "myPlot.png", plot = last_plot(), path = ".",
+       width = 6, height = 6, dpi = 400) 
+ggsave(filename = "myPlot1.png", plot = gg2, path = ".",  
+       width = 6, height = 6, dpi = 400)
+```
+### Embed the plot in report
+![myPlot](myPlot.png)
+![myPlot1](myPlot1.png)
+

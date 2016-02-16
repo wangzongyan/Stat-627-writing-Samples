@@ -1,0 +1,33 @@
+---
+title: "assignment 5"
+author: "Zongyan Wang"
+date: "Friday, November 27, 2015"
+output: pdf_document
+---
+# Assignment 5
+## Remove the previous file
+```{r}
+outputs <- c(# downloadData.R
+  "gapminder.tsv",                     
+              # summaryPlot and convertDataFormat.R
+          "gapminder.csv", "gdpPercapOverCountry.png", "popOverCountry.png",
+          "lifeExpOverCountry.png", "gdpPercapPlot.png", "popPlot.png",
+          "lifeExpPlot.png",
+          # linearRegression.R 
+      "lifeExpOnYear.csv", "Top3EconomylifeExp.png")
+file.remove(outputs)
+```
+## download file to current folder
+This step requires package "downloader" to solve the rmarkdown process may occur.
+```{r}
+source("downloadData.R")
+```
+## Read that data from "downloadData.R", perform some analysis and write numerical data to file in CSV
+```{r, warning = FALSE}
+source("summaryPlot and convertDataFormat.R")
+```
+## Read the data converted by "summaryPlot and convertDataFormat.R", fit linear regression and save the result to folder.
+```{r, warning = FALSE}
+source("linearRegression.R")
+```
+Please visit my Github page: https://github.com/wangzongyan for more R and Phython code.
